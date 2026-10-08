@@ -25,6 +25,9 @@ Output: `dryrun-report/report.md` + `report.json`.
 4. Adds static checks for the n8n 3.0 changes: removed nodes, AI Agent v1 old modes, Gmail Trigger below 1.4, If/Switch
    "Always Output Data", sub-workflows from files/URLs, Execute Command (the 3.0 image has no package manager),
    Code steps over 60 s, unverified community packages.
+   Since 0.8 also a CHECK for trigger-like nodes (Webhook, Wait, triggers, "send and wait") whose id is longer than
+   36 characters: on Postgres with n8n 2.30+ publishing such a workflow can silently keep serving the old version
+   (n8n issue #40606, open). Fix: re-create the node so it gets a normal id.
 
 Results per node: `SAME`, `CHANGED`, `NOT-RUN-NEW` (no longer reached), `ERROR-NEW`, `FAILED-NEW`, ... and the
 opposite cases. The exit code is 0 only if **every** workflow ran on both versions and **every** node gave the same output.

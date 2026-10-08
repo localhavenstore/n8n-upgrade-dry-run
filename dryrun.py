@@ -15,7 +15,7 @@ Safety model:
 import argparse, copy, hashlib, html, json, os, re, secrets, subprocess, sys, tempfile
 
 SHOW_NAMES = False      # set by --show-names: PRIVATE report (names/types may contain secrets) - never share it
-RULESET = {"version": "2026-10-07a", "source": "https://docs.n8n.io/changelog/v30-breaking-changes/", "checked": "2026-10-07"}
+RULESET = {"version": "2026-10-07b", "source": "https://docs.n8n.io/changelog/v30-breaking-changes/", "checked": "2026-10-07"}
 START = "n8n-nodes-base.manualTrigger"
 KEEP_START = {"n8n-nodes-base.manualTrigger"}          # every other trigger (incl. Execute Workflow Trigger) gets sample items
 NONDETERMINISTIC = {"createdAt", "updatedAt", "executionId"}   # top-level json keys only; disclosed in every report
@@ -239,6 +239,11 @@ def _static(wf):
         if "$getPairedItem" in js or "$evaluateExpression" in js: out.append((n["name"], "CHECK", "uses $getPairedItem / $evaluateExpression"))
         if t == "n8n-nodes-base.executeCommand": out.append((n["name"], "CHECK", "Execute Command: the command must exist in the 3.0 image (Alpine, no apk)"))
         if t == "n8n-nodes-base.code": out.append((n["name"], "INFO", "Code steps longer than 60 s fail in 3.0 unless N8N_RUNNERS_TASK_TIMEOUT is raised"))
+        nid = n.get("id")
+        trig = short.lower().endswith("trigger") or t.split(".")[-1] in ("webhook", "wait", "form") or p.get("operation") == "sendAndWait"
+        if isinstance(nid, str) and len(nid) > 36 and trig:
+            out.append((n["name"], "CHECK", "trigger-like node id is longer than 36 characters: on Postgres with n8n 2.30+ publishing can silently keep "
+                                          "serving the OLD version (n8n issue #40606) - re-create this node (copy/paste) so it gets a normal id"))
         if "." in t and not base and not lc:
             out.append((n["name"], "CHECK", "community node (" + (redact(t, 80) if SHOW_NAMES else "type hidden") + "): unverified community packages are off by default in 3.0"))
     return out
