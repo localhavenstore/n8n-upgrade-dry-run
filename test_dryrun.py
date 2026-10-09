@@ -60,4 +60,8 @@ chk("ERROR-BOTH", d.node_status(ok_, ok_, [{"error": "x", "branches": []}], [{"e
 md_private = d.markdown({"old": {"image": "a", "digest": "sha256:" + "0" * 64, "versions": "1"}, "new": {"image": "b", "digest": "sha256:" + "1" * 64, "versions": "2"},
                          "version_check": "ok", "static": {}, "runs": {}, "nodes": [], "rewrites": {}, "note": "n", "names": "shown"})
 chk("PRIVATE marker in markdown under --show-names", "PRIVATE REPORT" in md_private)
+# 0.9: our own advice text is not redacted (env var names stay readable); node names still are
+st9 = d.static({"nodes": [{"name": "token=abcd1234efgh5678ijkl", "type": "n8n-nodes-base.code", "parameters": {}}]})
+chk("0.9: advice keeps N8N_RUNNERS_TASK_TIMEOUT readable, node name with a secret is redacted",
+    any("N8N_RUNNERS_TASK_TIMEOUT" in m for _, _, m in st9) and all("abcd1234efgh5678ijkl" not in n for n, _, _ in st9))
 print("ALL PASSED" if not F else f"{len(F)} failed"); sys.exit(1 if F else 0)

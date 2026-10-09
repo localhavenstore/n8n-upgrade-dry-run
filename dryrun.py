@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""n8n Upgrade Dry-Run v0.7 (SPEC.md; Codex r1-r6 fixes).
+"""n8n Upgrade Dry-Run v0.9 (SPEC.md; Codex r1-r6 fixes; 0.9: n8n 2.42.6+ deprecated-node import block reported clearly).
 Runs COPIES of exported workflows on an OLD and a NEW n8n image and compares every node's output, plus static checks.
   dryrun.py --workflows export.json --old IMAGE --new IMAGE [--out DIR]
 Safety model:
@@ -147,21 +147,27 @@ def run_one(image, wf, timeout=300):
     with tempfile.TemporaryDirectory(prefix="dryrun-") as d:
         os.chmod(d, 0o700)
         p = os.path.join(d, "wf.json"); json.dump([wf], open(p, "w")); os.chmod(p, 0o600)
-        script = ("n8n --version 2>/dev/null | tail -1 | sed 's/^/VER:/'; n8n import:workflow --input=/in/wf.json >/dev/null 2>&1 || "
-                  "{ echo IMPORT-FAILED; exit 3; }; echo BEGIN-" + tag + "; n8n execute --id " + wf["id"] + " --rawOutput 2>&1; "
+        script = ("n8n --version 2>/dev/null | tail -1 | sed 's/^/VER:/'; n8n import:workflow --input=/in/wf.json >/tmp/imp1.txt 2>&1 || "
+                  # n8n 2.42.6+ refuses to import deprecated nodes (N8N_DEPRECATED_NODES_BLOCK, PR #40707); saved copies keep running.
+                  # Retry ONLY on n8n's own rejection text; any other import error stays an import failure.
+                  "{ grep -q 'this node type is deprecated' /tmp/imp1.txt && N8N_DEPRECATED_NODES_BLOCK=false n8n import:workflow "
+                  "--input=/in/wf.json >/dev/null 2>&1 && echo DEPRECATED-BLOCK-" + tag + " || { echo IMPORT-FAILED-" + tag + "; exit 3; }; }; echo BEGIN-" + tag + "; n8n execute --id " + wf["id"] + " --rawOutput 2>&1; "
                   "rc=$?; echo; echo END-" + tag + " $rc")
         try:
             r = subprocess.run(["sudo", "-n", "docker", "run", "--rm", "--name", "dryrun-" + tag, *HARDEN, "-e", "N8N_DIAGNOSTICS_ENABLED=false",
                                 "-e", "N8N_ENCRYPTION_KEY=" + secrets.token_hex(16), "-v", f"{d}:/in:ro", "--entrypoint", "sh", image, "-c", script],
                                capture_output=True, text=True, timeout=timeout)
             out = r.stdout
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             subprocess.run(["sudo", "-n", "docker", "rm", "-f", "dryrun-" + tag], capture_output=True, timeout=60)
-            return {"status": "timeout", "error": f"no result within {timeout} s", "nodes": {}, "version": "?"}
+            part = (e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")).split("BEGIN-" + tag)[0]
+            return {"status": "timeout", "error": f"no result within {timeout} s", "nodes": {}, "version": "?",
+                    "deprecated_block": ("DEPRECATED-BLOCK-" + tag) in part}
     ver = (re.search(r"^VER:(\S+)", out, re.M) or [None, "?"])[1]
-    if "IMPORT-FAILED" in out: return {"status": "import-failed", "error": "n8n could not import the workflow", "nodes": {}, "version": ver}
+    blocked = ("DEPRECATED-BLOCK-" + tag) in out.split("BEGIN-" + tag)[0]   # only what was printed before the run started
+    if re.search(r"^IMPORT-FAILED-" + tag + r"$", out.split("BEGIN-" + tag)[0], re.M): return {"status": "import-failed", "error": "n8n could not import the workflow", "nodes": {}, "version": ver}
     m = re.search(r"BEGIN-" + tag + r"\n(.*)\nEND-" + tag + r" (\d+)", out, re.S)
-    if not m: return {"status": "no-result", "error": "no marked result in the container output", "nodes": {}, "version": ver}
+    if not m: return {"status": "no-result", "error": "no marked result in the container output", "nodes": {}, "version": ver, "deprecated_block": blocked}
     body, rc = m.group(1), int(m.group(2))
     j = body.find("{"); data = None
     if j >= 0:
@@ -169,7 +175,7 @@ def run_one(image, wf, timeout=300):
         except ValueError: data = None
     if not data:
         e = re.search(r"((?:[A-Z]\w*)?Error|Problem[^:]{0,40}|Unrecognized node type[^:]{0,80})[:\s]+(.{0,200}?)(?=\s+at\s|$)", " ".join(body.split()))
-        return {"status": "failed", "error": safe_error(body), "nodes": {}, "version": ver, "rc": rc}
+        return {"status": "failed", "error": safe_error(body), "nodes": {}, "version": ver, "rc": rc, "deprecated_block": blocked}
     rd = data.get("data", {}).get("resultData", {})
     nodes = {}
     for name, nruns in rd.get("runData", {}).items():
@@ -178,7 +184,7 @@ def run_one(image, wf, timeout=300):
     st = data.get("status") or ("success" if data.get("finished") else "failed")
     if rc != 0 and st == "success": st = f"failed (n8n exit code {rc})"
     return {"status": st, "error": safe_error((rd.get("error") or {}).get("message")) if rd.get("error") else None, "nodes": nodes,
-            "version": ver, "rc": rc}
+            "version": ver, "rc": rc, "deprecated_block": blocked}
 
 
 def node_status(a, b, na, nb):
@@ -216,7 +222,8 @@ OLDMODES = {"conversationalAgent", "openAiFunctionsAgent", "planAndExecuteAgent"
 
 
 def static(wf):
-    return [(redact(nm, 100), lvl, redact(msg, 200)) for nm, lvl, msg in _static(wf)]
+    # messages are our own fixed texts (a community type in them is already redacted/hidden); only node names come from the user
+    return [(redact(nm, 100), lvl, msg) for nm, lvl, msg in _static(wf)]
 
 
 def _static(wf):
@@ -291,6 +298,7 @@ def main():
     ids = [f"dr{i + 1:04d}" for i in range(len(src))]
     pairs = [rewrite(w, i) for w, i in zip(src, ids)]
     runs, rows, vo, vn = {}, [], set(), set()
+    dep_block = {}                                                   # workflow -> sides where n8n refused the import (2.42.6+)
     label = {}
     def wn(o, w):                                                   # opaque unless --show-names
         return redact(o.get("name") or w["id"], 100) + f" [{w['id']}]" if a.show_names else f"workflow {w['id']}"
@@ -301,6 +309,8 @@ def main():
         name = wn(orig, wf)
         ra, rb = run_one(oimg, wf), run_one(nimg, wf)
         vo.add(ra["version"]); vn.add(rb["version"])
+        sides = [s_ for s_, r_ in (("old", ra), ("new", rb)) if r_.get("deprecated_block")]
+        if sides: dep_block[name] = (sides, rb["version"] if "new" in sides else ra["version"])
         runs[name] = {"old": {k: ra.get(k) for k in ("status", "error")}, "new": {k: rb.get(k) for k in ("status", "error")}}
         node_names = [n["name"] for n in wf.get("nodes", [])]
         if not node_names: rows.append({"workflow": name, "node": "(none)", "status": "EMPTY", "old_exercise": "-", "new_exercise": "-"})
@@ -326,6 +336,12 @@ def main():
                    "not a guarantee. Nodes that need the network show 'blocked (no network)'. Not tamper-proof against a deliberately malicious "
                    "workflow (its code runs in the same container) - run only workflows you trust; triggers get sample items via a Manual "
                    "Trigger + Code node (the CLI cannot feed an Execute Workflow Trigger)."}
+    for name, (sides, ver) in dep_block.items():
+        rep["static"].setdefault(name, []).append(("(whole workflow)", "CHECK",
+            f"n8n {esc(ver)} REFUSES to import or save this workflow ({'/'.join(sides)} side): it has deprecated nodes (e.g. Function, "
+            "Function Item, LangChain Code) and N8N_DEPRECATED_NODES_BLOCK is on by default from n8n 2.42.6. Copies that are already "
+            "saved keep running, but restoring a backup into a fresh n8n needs N8N_DEPRECATED_NODES_BLOCK=false - better: replace "
+            "those nodes with the Code node. (This test imported with the block off so the run could still be compared.)"))
     os.makedirs(a.out, exist_ok=True)
     json.dump(rep, open(os.path.join(a.out, "report.json"), "w"), indent=1)
     open(os.path.join(a.out, "report.md"), "w").write(markdown(rep))
