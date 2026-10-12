@@ -26,8 +26,11 @@ Output: `dryrun-report/report.md` + `report.json`.
    "Always Output Data", sub-workflows from files/URLs, Execute Command (the 3.0 image has no package manager),
    Code steps over 60 s, unverified community packages.
    Since 0.8 also a CHECK for trigger-like nodes (Webhook, Wait, triggers, "send and wait") whose id is longer than
-   36 characters: on Postgres with n8n 2.30+ publishing such a workflow can silently keep serving the old version
-   (n8n issue #40606, open). Fix: re-create the node so it gets a normal id.
+   36 characters (n8n issue #40606, open). Since 0.9.1 the text says what our own test showed (12 Oct 2026, a Webhook
+   node on Postgres): edits published after the first publish did not go live on n8n 2.41.4 and 2.42.7 - the first
+   version kept answering. On 2.42.7 it also kept answering after the workflow was deactivated, and changing the id
+   afterwards did not free it; changing the id to a normal one before the first publish worked. Other trigger-like
+   nodes are flagged because the issue reports them; we tested Webhook only.
    Since 0.9: **n8n 2.42.6 and newer refuse to import or save workflows with deprecated nodes** (Function, Function
    Item, LangChain Code - setting `N8N_DEPRECATED_NODES_BLOCK`, on by default). Saved workflows keep running, but a backup
    restore into a fresh n8n fails. The dry run now says so as a CHECK (instead of a generic "could not import"), still

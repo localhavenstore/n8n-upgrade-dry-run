@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""n8n Upgrade Dry-Run v0.9 (SPEC.md; Codex r1-r6 fixes; 0.9: n8n 2.42.6+ deprecated-node import block reported clearly).
+"""n8n Upgrade Dry-Run v0.9.1 (SPEC.md; Codex r1-r6 fixes; 0.9: n8n 2.42.6+ deprecated-node import block reported clearly;
+0.9.1: the long-node-id CHECK says what our own test showed - wording only, no change to runs or other rules).
 Runs COPIES of exported workflows on an OLD and a NEW n8n image and compares every node's output, plus static checks.
   dryrun.py --workflows export.json --old IMAGE --new IMAGE [--out DIR]
 Safety model:
@@ -16,6 +17,11 @@ import argparse, copy, hashlib, html, json, os, re, secrets, subprocess, sys, te
 
 SHOW_NAMES = False      # set by --show-names: PRIVATE report (names/types may contain secrets) - never share it
 RULESET = {"version": "2026-10-07b", "source": "https://docs.n8n.io/changelog/v30-breaking-changes/", "checked": "2026-10-07"}
+LONG_ID_MSG = ("trigger-like node id is longer than 36 characters (n8n issue #40606, open). In our test with a Webhook node on Postgres, edits "
+               "published AFTER the first publish did not go live on n8n 2.41.4 and 2.42.7: the first version kept answering. On 2.42.7 it also "
+               "kept answering after the workflow was deactivated, and a new id alone did not free it. Changing the id to a normal one BEFORE "
+               "the first publish worked (2.42.7). A normal id has 36 characters or fewer (re-creating the node gives one - that way is not "
+               "tested by us); for a workflow that is already published see the issue for the database step")
 START = "n8n-nodes-base.manualTrigger"
 KEEP_START = {"n8n-nodes-base.manualTrigger"}          # every other trigger (incl. Execute Workflow Trigger) gets sample items
 NONDETERMINISTIC = {"createdAt", "updatedAt", "executionId"}   # top-level json keys only; disclosed in every report
@@ -249,8 +255,9 @@ def _static(wf):
         nid = n.get("id")
         trig = short.lower().endswith("trigger") or t.split(".")[-1] in ("webhook", "wait", "form") or p.get("operation") == "sendAndWait"
         if isinstance(nid, str) and len(nid) > 36 and trig:
-            out.append((n["name"], "CHECK", "trigger-like node id is longer than 36 characters: on Postgres with n8n 2.30+ publishing can silently keep "
-                                          "serving the OLD version (n8n issue #40606) - re-create this node (copy/paste) so it gets a normal id"))
+            # wording from our own test of 12 Oct 2026 (n8n 2.41.4 and 2.42.7, PostgreSQL 16, a Webhook node with a 40-character id);
+            # other trigger-like nodes are covered by the report in the issue, not by our test - the message says which is which
+            out.append((n["name"], "CHECK", LONG_ID_MSG))
         if "." in t and not base and not lc:
             out.append((n["name"], "CHECK", "community node (" + (redact(t, 80) if SHOW_NAMES else "type hidden") + "): unverified community packages are off by default in 3.0"))
     return out

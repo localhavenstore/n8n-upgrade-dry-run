@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regression tests for dryrun.py (no containers): rewrite, labels, secrecy, binary, static rules. Fail-closed exit code."""
-import sys; sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__))); import dryrun as d
+import re, sys; sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__))); import dryrun as d
 F = []
 def chk(n, ok): print(("ok   " if ok else "FAIL ") + n); ok or F.append(n)
 ok_, bad = {"status": "success"}, {"status": "failed"}
@@ -42,6 +42,24 @@ chk("opaque binary -> UNVERIFIABLE", d.inline_hash({"data": "filesystem-v2:abc",
 chk("bad fileSize format -> UNVERIFIABLE", d.inline_hash({"data": "aGk=", "fileSize": "2 kB"}) == "UNVERIFIABLE")
 chk("content hash differs by content", d.inline_hash({"data": "aGk="}) != d.inline_hash({"data": "aG8="}))
 # static rules
+# 0.9.1: the long-node-id rule (n8n issue 40606) - who gets it, who does not, and what the message may claim
+L40, L36 = "long-0a1b2c3d-1111-4222-8333-44445555666", "0a1b2c3d-1111-4222-8333-444455556666"
+lid = lambda node: [m for _, l, m in d.static({"nodes": [node]}) if l == "CHECK" and "longer than 36" in m]
+chk("0.9.1 long id: a Webhook node with a 40-character id gets exactly one CHECK", len(L40) == 40 and len(lid({"name": "w", "type": "n8n-nodes-base.webhook", "id": L40})) == 1)
+chk("0.9.1 long id: 36 characters (a normal id) is NOT flagged, 37 is", len(L36) == 36 and not lid({"name": "w", "type": "n8n-nodes-base.webhook", "id": L36}) and len(lid({"name": "w", "type": "n8n-nodes-base.webhook", "id": L36 + "x"})) == 1)
+chk("0.9.1 long id: Wait, Form, a *Trigger node and a send-and-wait operation are flagged too",
+    all(len(lid(n)) == 1 for n in ({"name": "a", "type": "n8n-nodes-base.wait", "id": L40}, {"name": "b", "type": "n8n-nodes-base.form", "id": L40}, {"name": "c", "type": "n8n-nodes-base.telegramTrigger", "id": L40},
+                                   {"name": "e", "type": "n8n-nodes-base.slack", "id": L40, "parameters": {"operation": "sendAndWait"}})))
+chk("0.9.1 long id: a long id on a node that is NOT trigger-like (Set, Code) is not flagged; a missing or non-text id does not crash (control: the same id on a Webhook IS flagged)",
+    len(lid({"name": "w", "type": "n8n-nodes-base.webhook", "id": L40})) == 1 and not lid({"name": "s", "type": "n8n-nodes-base.set", "id": L40}) and not lid({"name": "c", "type": "n8n-nodes-base.code", "id": L40}) and not lid({"name": "w", "type": "n8n-nodes-base.webhook"}) and not lid({"name": "w", "type": "n8n-nodes-base.webhook", "id": 12345}))
+msg = (lid({"name": "w", "type": "n8n-nodes-base.webhook", "id": L40}) or [""])[0]
+chk("0.9.1 long id: the stale-version result is given for BOTH tested versions, with the tested node kind and database, and '2.30+' / 'silently' are gone",
+    "did not go live on n8n 2.41.4 and 2.42.7: the first version kept answering." in msg and "Webhook node on Postgres" in msg and "#40606" in msg and "2.30" not in msg and "silently" not in msg)
+chk("0.9.1 long id: the deactivation result and 'a new id alone did not free it' are tied to 2.42.7 ONLY (review r11)",
+    "On 2.42.7 it also kept answering after the workflow was deactivated, and a new id alone did not free it." in msg and not re.search(r"2\.41\.4[^.]*deactivat", msg))
+chk("0.9.1 long id: the fix that worked is named with its version, and re-creating the node is marked as not tested by us",
+    "BEFORE the first publish worked (2.42.7)" in msg and "not tested by us" in msg and "database step" in msg)
+chk("0.9.1 long id: the id itself never appears in the finding (and there is a finding)", len(msg) > 100 and L40 not in " ".join(str(x) for f in d.static({"nodes": [{"name": "w", "type": "n8n-nodes-base.webhook", "id": L40}]}) for x in f))
 chk("Function -> BREAKS", any(l == "BREAKS" for _, l, _ in d.static({"nodes": [{"name": "f", "type": "n8n-nodes-base.function"}]})))
 chk("base Code not BREAKS", not any(l == "BREAKS" for _, l, _ in d.static({"nodes": [{"name": "c", "type": "n8n-nodes-base.code"}]})))
 chk("Gmail 1.3 BEHAVIOUR, 1.4 not", any(l == "BEHAVIOUR" for _, l, _ in d.static({"nodes": [{"name": "g", "type": "n8n-nodes-base.gmailTrigger", "typeVersion": 1.3}]}))
