@@ -63,6 +63,10 @@ Linux with Docker and the gVisor runtime (`runsc`), Python 3.10+, `sudo` for Doc
 n8n v3 release-candidate image (2026-10-07).
 
 ## Need it done for you?
+Want it checked for you before n8n 3.0? Send one export file and get a short written report: the
+[free n8n 3.0 readiness report](https://localhavenstore.github.io/n8n-3-readiness/) (the first 10 are free - read on
+that page what the export must NOT contain).
+
 A written **Tested Upgrade Report** for your instance (your workflows, both versions, the fixes for what changes) is
 planned as a paid service - see [localhavenstore.github.io](https://localhavenstore.github.io/self-host-safety/).
 Moving an npm/npx n8n to Docker first? The free [n8n Move Check](https://github.com/localhavenstore/n8n-move-check).
